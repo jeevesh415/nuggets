@@ -50,6 +50,10 @@ Hooks into the Pi agent lifecycle:
 ### Prerequisites
 
 - Node.js 18+
+- [Pi](https://github.com/mariozechner/pi) — the AI coding agent that powers the assistant. Install globally:
+  ```bash
+  npm install -g @mariozechner/pi-coding-agent
+  ```
 - An [Anthropic API key](https://console.anthropic.com/) (the Max plan does **not** work — Anthropic blocked third-party OAuth in Jan 2026)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - Your Telegram chat ID (from [@userinfobot](https://t.me/userinfobot))
@@ -57,6 +61,7 @@ Hooks into the Pi agent lifecycle:
 ### Quick Start
 
 ```bash
+npm install -g @mariozechner/pi-coding-agent   # install Pi (if not already)
 git clone https://github.com/NeoVertex1/nuggets.git
 cd nuggets
 npm install
