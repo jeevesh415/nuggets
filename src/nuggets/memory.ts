@@ -454,6 +454,23 @@ export class Nugget {
       if (t.toLowerCase().includes(text) || text.includes(t.toLowerCase())) return t;
     }
 
+    // Token overlap fallback — helps natural language queries like
+    // "how to deploy" → "deploy-process"
+    const queryTokens = tokenizeForMatch(text);
+    let bestTokenTag = "";
+    let bestTokenScore = 0;
+    if (queryTokens.size > 0) {
+      for (const t of tags) {
+        const tagTokens = tokenizeForMatch(t.toLowerCase());
+        const score = tokenOverlapScore(queryTokens, tagTokens);
+        if (score > bestTokenScore) {
+          bestTokenTag = t;
+          bestTokenScore = score;
+        }
+      }
+    }
+    if (bestTokenScore >= 0.5) return bestTokenTag;
+
     // Fuzzy match (SequenceMatcher equivalent)
     let best = "";
     let bestScore = 0;
@@ -478,6 +495,46 @@ function sequenceMatchRatio(a: string, b: string): number {
 
   const matches = countMatches(a, b);
   return (2 * matches) / (a.length + b.length);
+}
+
+const MATCH_STOP_WORDS = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "shall", "can", "need", "must",
+  "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+  "they", "them", "their", "its", "this", "that", "these", "those",
+  "what", "which", "who", "whom", "where", "when", "why", "how",
+  "and", "or", "but", "nor", "not", "no", "so", "if", "then",
+  "of", "in", "on", "at", "to", "for", "with", "by", "from",
+  "up", "about", "into", "through", "during", "before", "after",
+  "again", "further", "just", "also", "very", "too", "only",
+  "all", "any", "both", "each", "few", "more", "most", "some",
+  "such", "than", "other", "own", "same", "here", "there", "now",
+  "then", "once", "show", "tell", "run", "use", "using",
+]);
+
+function tokenizeForMatch(text: string): Set<string> {
+  const cleaned = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  const tokens = new Set<string>();
+  for (const word of cleaned.split(/\s+/)) {
+    if (!word || word.length < 2) continue;
+    if (MATCH_STOP_WORDS.has(word)) continue;
+    tokens.add(word);
+  }
+  return tokens;
+}
+
+function tokenOverlapScore(queryTokens: Set<string>, tagTokens: Set<string>): number {
+  if (queryTokens.size === 0 || tagTokens.size === 0) return 0;
+  let overlap = 0;
+  for (const token of queryTokens) {
+    if (tagTokens.has(token)) overlap++;
+  }
+  return overlap / Math.max(1, Math.min(queryTokens.size, tagTokens.size));
 }
 
 /** Count matching characters using longest common subsequence blocks. */

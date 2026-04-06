@@ -8,6 +8,7 @@
 import { readdirSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { Nugget, DEFAULT_SAVE_DIR } from "./memory.js";
+import { DEFAULT_KIND_NAMES, type MemoryKind } from "./kinds.js";
 
 export class NuggetShelf {
   readonly saveDir: string;
@@ -64,10 +65,22 @@ export class NuggetShelf {
     return [...this._nuggets.values()].map((n) => n.status());
   }
 
+  kindName(kind: MemoryKind): string {
+    return DEFAULT_KIND_NAMES[kind];
+  }
+
+  getOrCreateKind(kind: MemoryKind): Nugget {
+    return this.getOrCreate(this.kindName(kind));
+  }
+
   // -- convenience pass-throughs -------------------------------------------
 
   remember(nuggetName: string, key: string, value: string): void {
     this.get(nuggetName).remember(key, value);
+  }
+
+  rememberKind(kind: MemoryKind, key: string, value: string): void {
+    this.getOrCreateKind(kind).remember(key, value);
   }
 
   recall(
@@ -98,8 +111,50 @@ export class NuggetShelf {
     return best;
   }
 
+  recallInOrder(
+    query: string,
+    nuggetNames: string[],
+    sessionId = "",
+  ): ReturnType<Nugget["recall"]> & { nugget_name: string | null } {
+    let best: ReturnType<Nugget["recall"]> & { nugget_name: string | null } = {
+      answer: null,
+      confidence: 0,
+      margin: 0,
+      found: false,
+      key: "",
+      nugget_name: null,
+    };
+
+    for (const name of nuggetNames) {
+      if (!this.has(name)) continue;
+      const result = this.get(name).recall(query, sessionId);
+      if (!result.found) continue;
+      if (!best.found || result.confidence > best.confidence) {
+        best = { ...result, nugget_name: name };
+      }
+    }
+
+    return best;
+  }
+
+  recallByKind(
+    query: string,
+    kinds: MemoryKind[] = ["user", "project", "agent"],
+    sessionId = "",
+  ): ReturnType<Nugget["recall"]> & { nugget_name: string | null; memory_kind: MemoryKind | null } {
+    const orderedNames = kinds.map((kind) => this.kindName(kind));
+    const result = this.recallInOrder(query, orderedNames, sessionId);
+    const memoryKind = kinds.find((kind) => this.kindName(kind) === result.nugget_name) ?? null;
+    return { ...result, memory_kind: memoryKind };
+  }
+
   forget(nuggetName: string, key: string): boolean {
     return this.get(nuggetName).forget(key);
+  }
+
+  forgetKind(kind: MemoryKind, key: string): boolean {
+    if (!this.has(this.kindName(kind))) return false;
+    return this.get(this.kindName(kind)).forget(key);
   }
 
   // -- persistence ---------------------------------------------------------

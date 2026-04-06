@@ -9,7 +9,8 @@
     "start": "node dist/gateway/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "setup": "tsx src/setup.ts"
+    "setup": "tsx src/setup.ts",
+    "migrate:memory": "tsx src/migrate-memory.ts"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

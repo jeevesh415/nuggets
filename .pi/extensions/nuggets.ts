@@ -16,7 +16,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { NuggetShelf, promoteFacts } from "../../src/nuggets/index.js";
+import { NuggetShelf, promoteFacts, inferMemoryKind, MEMORY_KIND_ORDER, type MemoryKind } from "../../src/nuggets/index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,12 +37,24 @@ interface NuggetsDetails {
 // Shelf instance — direct library access (no CLI bridge)
 // ---------------------------------------------------------------------------
 
-const shelf = new NuggetShelf();
-shelf.loadAll();
+let shelf = loadShelf();
 
-function shelfRemember(nuggetName: string, key: string, value: string): void {
-	const nugget = shelf.getOrCreate(nuggetName);
-	nugget.remember(key, value);
+function loadShelf(): NuggetShelf {
+	const next = new NuggetShelf();
+	next.loadAll();
+	return next;
+}
+
+function refreshShelf(): NuggetShelf {
+	shelf = loadShelf();
+	return shelf;
+}
+
+function shelfRemember(key: string, value: string, kind?: MemoryKind): MemoryKind {
+	const resolvedKind = kind ?? inferMemoryKind(key, value);
+	const activeShelf = refreshShelf();
+	activeShelf.rememberKind(resolvedKind, key, value);
+	return resolvedKind;
 }
 
 function shelfRecall(query: string, nuggetName?: string, sessionId = ""): {
@@ -51,24 +63,44 @@ function shelfRecall(query: string, nuggetName?: string, sessionId = ""): {
 	confidence: number;
 	nugget_name: string | null;
 	margin: number;
+	memory_kind?: MemoryKind | null;
 } {
-	return shelf.recall(query, nuggetName, sessionId);
+	const activeShelf = refreshShelf();
+	if (nuggetName) {
+		const result = activeShelf.recall(query, nuggetName, sessionId);
+		const memoryKind = MEMORY_KIND_ORDER.find((kind) => activeShelf.kindName(kind) === nuggetName) ?? null;
+		return { ...result, memory_kind: memoryKind };
+	}
+	return activeShelf.recallByKind(query, MEMORY_KIND_ORDER, sessionId);
 }
 
-function shelfForget(nuggetName: string, key: string): boolean {
-	try {
-		return shelf.get(nuggetName).forget(key);
-	} catch {
-		return false;
+function shelfForget(key: string, nuggetName?: string): boolean {
+	const activeShelf = refreshShelf();
+	if (nuggetName) {
+		try {
+			return activeShelf.get(nuggetName).forget(key);
+		} catch {
+			return false;
+		}
 	}
+	for (const kind of MEMORY_KIND_ORDER) {
+		if (activeShelf.forgetKind(kind, key)) return true;
+	}
+	return false;
 }
 
-function shelfFacts(nuggetName: string): Fact[] {
-	try {
-		return shelf.get(nuggetName).facts().map((f) => ({ key: f.key, value: f.value }));
-	} catch {
-		return [];
+function shelfFacts(nuggetName?: string): Fact[] {
+	const activeShelf = refreshShelf();
+	const names = nuggetName ? [nuggetName] : MEMORY_KIND_ORDER.map((kind) => activeShelf.kindName(kind));
+	const all: Fact[] = [];
+	for (const name of names) {
+		try {
+			all.push(...activeShelf.get(name).facts().map((f) => ({ key: f.key, value: f.value })));
+		} catch {
+			continue;
+		}
 	}
+	return all;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +196,8 @@ const NuggetsParams = Type.Object({
 	key: Type.Optional(Type.String({ description: "Fact key (for remember/forget)" })),
 	value: Type.Optional(Type.String({ description: "Fact value (for remember)" })),
 	query: Type.Optional(Type.String({ description: "Search query (for recall)" })),
+	nugget: Type.Optional(Type.String({ description: "Optional nugget name override such as user, project, or agent" })),
+	kind: Type.Optional(Type.String({ description: "Optional memory kind override: user, project, or agent" })),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -195,9 +229,10 @@ export default function (pi: ExtensionAPI) {
 	// Reconstruct on all session lifecycle events
 	pi.on("session_start", async (_event, ctx) => {
 		reconstructState(ctx);
+		refreshShelf();
 
 		// Hydrate from shelf (cross-session facts)
-		const shelfFactsList = shelfFacts("memory");
+		const shelfFactsList = shelfFacts();
 		for (const f of shelfFactsList) {
 			if (!facts.has(f.key)) {
 				facts.set(f.key, f.value);
@@ -225,11 +260,18 @@ export default function (pi: ExtensionAPI) {
 			"Use nuggets to remember useful discoveries (file paths, patterns, commands)",
 			"Before searching for something, recall from nuggets first",
 			"Store user preferences when they say 'always', 'prefer', or 'never'",
+			"Use kind=user for user facts, kind=project for repo/file facts, and kind=agent for self facts when you need control",
 			"Keep values short — one sentence max",
 		],
 		parameters: NuggetsParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const activeShelf = refreshShelf();
+			const kind = (params.kind === "user" || params.kind === "project" || params.kind === "agent"
+				? (params.kind as MemoryKind)
+				: undefined);
+			const nuggetName = params.nugget || (kind ? activeShelf.kindName(kind) : undefined);
+
 			switch (params.action) {
 				case "remember": {
 					if (!params.key || !params.value) {
@@ -241,10 +283,15 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					facts.set(params.key, params.value);
-					shelfRemember("memory", params.key, params.value);
+					const storedKind = nuggetName
+						? (MEMORY_KIND_ORDER.find((candidate) => activeShelf.kindName(candidate) === nuggetName) ?? kind ?? inferMemoryKind(params.key, params.value))
+						: shelfRemember(params.key, params.value, kind);
+					if (nuggetName) {
+						activeShelf.getOrCreate(nuggetName).remember(params.key, params.value);
+					}
 
 					return {
-						content: [{ type: "text", text: `Remembered: ${params.key} = ${params.value}` }],
+						content: [{ type: "text", text: `Remembered: ${params.key} = ${params.value} [${storedKind}]` }],
 						details: { action: "remember", facts: factsToRecord() } as NuggetsDetails,
 					};
 				}
@@ -260,13 +307,14 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					// HRR-backed recall via shelf
-					const result = shelfRecall(query);
+					const result = shelfRecall(query, nuggetName);
 					if (result.found && result.answer) {
+						const source = result.memory_kind || result.nugget_name || "memory";
 						return {
 							content: [
 								{
 									type: "text",
-									text: `${result.answer}\n[confidence=${result.confidence.toFixed(3)}, source=${result.nugget_name || "memory"}]`,
+									text: `${result.answer}\n[confidence=${result.confidence.toFixed(3)}, source=${source}]`,
 								},
 							],
 							details: { action: "recall", facts: factsToRecord() } as NuggetsDetails,
@@ -302,8 +350,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
-					const existed = facts.delete(params.key);
-					shelfForget("memory", params.key);
+					const existed = facts.delete(params.key) || shelfForget(params.key, nuggetName);
 
 					return {
 						content: [{ type: "text", text: existed ? `Forgot: ${params.key}` : `Key not found: ${params.key}` }],
@@ -312,7 +359,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				case "list": {
-					const allFacts = factsToList();
+					const allFacts = nuggetName ? shelfFacts(nuggetName) : factsToList();
 					if (allFacts.length === 0) {
 						return {
 							content: [{ type: "text", text: "No facts stored" }],
@@ -338,6 +385,8 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme) {
 			let text = theme.fg("toolTitle", theme.bold("nuggets ")) + theme.fg("muted", args.action);
+			if (args.kind) text += ` ${theme.fg("warning", `[${args.kind}]`)}`;
+			if (args.nugget) text += ` ${theme.fg("warning", `[${args.nugget}]`)}`;
 			if (args.key) text += ` ${theme.fg("accent", args.key)}`;
 			if (args.value) text += ` ${theme.fg("dim", `"${args.value}"`)}`;
 			if (args.query) text += ` ${theme.fg("dim", `"${args.query}"`)}`;
@@ -432,9 +481,10 @@ export default function (pi: ExtensionAPI) {
 
 			if (event.toolName === "read") {
 				facts.set(`file:${basename}`, filePath);
+				shelfRemember(`file:${basename}`, filePath, "project");
 			} else if (event.toolName === "edit" || event.toolName === "write") {
 				facts.set(`edited:${basename}`, filePath);
-				shelfRemember("memory", `edited:${basename}`, filePath);
+				shelfRemember(`edited:${basename}`, filePath, "project");
 			}
 		}
 
@@ -453,7 +503,7 @@ export default function (pi: ExtensionAPI) {
 		const pref = extractPreference(event.text);
 		if (pref) {
 			facts.set(pref.key, pref.value);
-			shelfRemember("memory", pref.key, pref.value);
+			shelfRemember(pref.key, pref.value, "user");
 		}
 
 		return { action: "continue" as const };
@@ -483,7 +533,7 @@ export default function (pi: ExtensionAPI) {
 		if (userMessages.length > 0) {
 			const taskSummary = userMessages.slice(-3).join(" | ").slice(0, 200);
 			facts.set("_task", taskSummary);
-			shelfRemember("memory", "_task", taskSummary);
+			shelfRemember("_task", taskSummary, "project");
 		}
 
 		const toolCalls = messagesToSummarize

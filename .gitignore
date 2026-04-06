@@ -5,6 +5,15 @@ dist/
 .env
 dump/
 
+# Local launchd / service configs
+*.plist
+
+# Internal research notes
+HRR_MEMORY_SYSTEM.md
+
+# Test fixtures with local paths
+tests/shelf.test.ts
+
 # Python (legacy)
 __pycache__/
 *.pyc
