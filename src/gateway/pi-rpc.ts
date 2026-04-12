@@ -65,10 +65,11 @@ export class PiRpc extends EventEmitter {
     this.proc.stdout!.on("data", (chunk: Buffer) => this.onData(chunk));
     this.proc.stderr!.on("data", (chunk: Buffer) => {
       const msg = chunk.toString().trim();
-      if (msg) log.warn({ stderr: msg }, "Pi stderr");
+      if (msg) log.info({ stderr: msg.slice(0, 500) }, "Pi stderr");
     });
 
     this.proc.on("exit", (code, signal) => {
+      log.info({ code, signal }, "Pi process exiting");
       this.rejectAll(new Error(`Pi exited: code=${code} signal=${signal}`));
       this.proc = null;
       this.emit("exit", code, signal);
@@ -152,17 +153,31 @@ export class PiRpc extends EventEmitter {
   }
 
   private onLine(line: string): void {
+    log.info({ raw: line.slice(0, 500) }, "Pi raw line");
+
     let event: RpcEvent;
     try {
       event = JSON.parse(line);
     } catch {
+      log.warn({ line: line.slice(0, 200) }, "Pi non-JSON line");
       return;
     }
 
     if (event.type === "session_compact" || event.type === "compaction_start" || event.type === "compaction_end") {
       log.warn({ type: event.type }, "Pi context compaction triggered");
     } else {
-      log.debug({ type: event.type, id: event.id, hasCmd: !!event.command, success: event.success }, "Pi event");
+      // Log all events at info level for diagnostics
+      log.info({ type: event.type, id: event.id, hasCmd: !!event.command, success: event.success, keys: Object.keys(event) }, "Pi event");
+    }
+
+    // Log agent_end structure for debugging empty responses
+    if (event.type === "agent_end") {
+      log.info({ agentEndKeys: Object.keys(event), hasMessages: Array.isArray(event.messages), messageCount: Array.isArray(event.messages) ? (event.messages as any[]).length : 0 }, "agent_end structure");
+      if (Array.isArray(event.messages)) {
+        for (const msg of event.messages as any[]) {
+          log.info({ role: msg.role, contentType: typeof msg.content, isArray: Array.isArray(msg.content), contentStr: typeof msg.content === "string" ? msg.content.slice(0, 200) : undefined, blocks: Array.isArray(msg.content) ? (msg.content as any[]).map((b: any) => ({ type: b.type, hasText: !!b.text })) : undefined }, "agent_end message");
+        }
+      }
     }
 
     // Route by id, or fallback to the single active pending request

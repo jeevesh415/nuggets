@@ -18,14 +18,15 @@ Think of it as an AI that lives in your pocket, remembers what matters, and reac
 
 The core of the system. Pure TypeScript, zero dependencies.
 
-Each "nugget" is a topic-scoped memory (e.g., `learnings`, `preferences`, `project`). Facts are key-value pairs compressed into a fixed-size complex vector via HRR binding. Multiple facts superpose into one mathematical object but remain individually retrievable.
+Each "nugget" is a topic-scoped memory (e.g., `user`, `project`, `agent`). Facts are key-value pairs compressed into a fixed-size complex vector via HRR binding. Multiple facts superpose into one mathematical object but remain individually retrievable.
 
 - **remember** — bind a key-value pair into the holographic vector
-- **recall** — unbind a query and decode via cosine similarity (~1ms)
+- **recall** — unbind a query and decode via cosine similarity (~1ms), with token-overlap matching for natural language queries
 - **forget** — subtract a binding from the superposition
 - **promote** — facts recalled 3+ times get written to `MEMORY.md` for permanent context
+- **memory kinds** — facts are auto-classified into `user` (preferences), `project` (files, commands, repo context), or `agent` (self-knowledge) scopes. Recall searches across kinds in priority order.
 
-Storage is a simple JSON file per nugget at `~/.nuggets/`. Vectors are never serialized — they're rebuilt deterministically from a seeded PRNG, so the files stay tiny.
+Storage is a simple JSON file per kind at `~/.nuggets/` (e.g., `user.nugget.json`, `project.nugget.json`). Vectors are never serialized — they're rebuilt deterministically from a seeded PRNG, so the files stay tiny. A migration script (`npm run migrate:memory`) splits legacy single-file memory into the new kind-based layout.
 
 ### Messaging Gateway (`src/gateway/`)
 
@@ -42,7 +43,7 @@ A multi-channel message router that connects your AI to Telegram and WhatsApp.
 
 Hooks into the Pi agent lifecycle:
 
-- **nuggets.ts** — gives Pi a `nuggets` tool for remember/recall/forget, auto-captures file paths and user preferences from conversation, injects memory into system prompt
+- **nuggets.ts** — gives Pi a `nuggets` tool for remember/recall/forget with memory kind routing, auto-captures file paths and user preferences from conversation, injects memory into system prompt
 - **proactive.ts** — gives Pi a `schedule` tool so it can create reminders and recurring tasks on its own
 
 ## Setup
@@ -157,10 +158,13 @@ EventQueue ◄── cron fires ── "0 9 * * *"
 src/
   nuggets/              Memory engine (pure TypeScript, zero deps)
     core.ts             HRR math: bind, unbind, orthogonalize, sharpen
-    memory.ts           Nugget class: remember, recall, forget
-    shelf.ts            NuggetShelf: multi-nugget manager
+    memory.ts           Nugget class: remember, recall, forget (+ token-overlap matching)
+    shelf.ts            NuggetShelf: multi-nugget manager with kind-aware routing
+    kinds.ts            Memory kind types, auto-classification heuristics
     promote.ts          MEMORY.md promotion (3+ recall threshold)
     index.ts            Public API
+
+  migrate-memory.ts     Migration: legacy single nugget → kind-based layout
 
   gateway/              Messaging gateway
     main.ts             Entry point — wires everything together
@@ -188,6 +192,7 @@ src/
 | `npm run setup` | Interactive setup wizard — creates `.env` |
 | `npm run dev` | Start the gateway (Telegram + WhatsApp) |
 | `npm test` | Run tests |
+| `npm run migrate:memory` | Migrate legacy single-file memory to kind-based layout |
 | `npm run typecheck` | Type-check without emitting |
 | `npm run build` | Compile to `dist/` |
 

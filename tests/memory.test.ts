@@ -132,6 +132,26 @@ describe("Nugget", () => {
     expect(result.answer).toBeNull();
   });
 
+  it("matches natural language queries by token overlap", () => {
+    const n = new Nugget({ name: "nl", D: 1024, banks: 4, autoSave: false });
+    n.remember("deploy-process", "git push to main triggers vercel");
+    n.remember("python-version", "3.11.9");
+    n.remember("favorite-food", "cheese strings");
+
+    expect(n.recall("how to deploy").answer).toBe("git push to main triggers vercel");
+    expect(n.recall("which python version").answer).toBe("3.11.9");
+    expect(n.recall("what food do they like").answer).toBe("cheese strings");
+  });
+
+  it("still avoids false positives for unrelated natural language", () => {
+    const n = new Nugget({ name: "nl-safe", D: 1024, banks: 4, autoSave: false });
+    n.remember("deploy-process", "git push to main triggers vercel");
+    n.remember("favorite-food", "cheese strings");
+
+    const result = n.recall("weather forecast tomorrow");
+    expect(result.found).toBe(false);
+  });
+
   it("ignores empty key/value on remember", () => {
     const n = new Nugget({ name: "test", D: 512, banks: 2, autoSave: false });
     n.remember("", "value");
